@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, usePowerSync } from '@powersync/react'
 import { supabase } from '../lib/supabaseConnector'
 import { proximaFechaPago, formatFecha, textoPlazo, nombreDiaSemana } from '../lib/fechas'
@@ -45,8 +45,6 @@ export default function DeudaDetalle() {
 
     try {
       const pagoId = crypto.randomUUID()
-
-      // user_id desde sesion de Supabase — no usar auth.uid() en SQLite
       const { data: { session } } = await supabase.auth.getSession()
       const userId = session?.user?.id ?? deuda.user_id
 
@@ -72,11 +70,22 @@ export default function DeudaDetalle() {
     navigate('/')
   }
 
+  const totalPagado = (pagos ?? []).reduce((sum, p) => sum + Number(p.monto), 0)
+
   return (
     <div className="p-4 space-y-6">
-      <button onClick={() => navigate(-1)} className="text-sm text-slate-400">
-        Volver
-      </button>
+      {/* Header con volver y editar */}
+      <div className="flex items-center justify-between">
+        <button onClick={() => navigate(-1)} className="text-sm text-slate-400">
+          Volver
+        </button>
+        <Link
+          to={'/deuda/' + id + '/editar'}
+          className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300"
+        >
+          Editar
+        </Link>
+      </div>
 
       <div>
         <h1 className="text-2xl font-bold">{deuda.nombre}</h1>
@@ -86,56 +95,69 @@ export default function DeudaDetalle() {
         </p>
       </div>
 
+      {/* Info de la deuda */}
       <div className="rounded-xl bg-surface p-4 space-y-2">
         <Fila
           label="Total a pagar"
           value={'$' + Number(deuda.total_a_pagar).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+        />
+        <Fila
+          label="Total pagado"
+          value={'$' + totalPagado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+          valueClass="text-accent"
         />
         {proxima && <Fila label="Proximo pago" value={formatFecha(proxima)} />}
         {deuda.fecha_corte && <Fila label="Dia de corte" value={'Dia ' + deuda.fecha_corte} />}
         {deuda.dia_semana_pago !== null && deuda.dia_semana_pago !== undefined && (
           <Fila label="Dia de pago" value={nombreDiaSemana(Number(deuda.dia_semana_pago))} />
         )}
-        {plazo && <Fila label="Plazo" value={plazo} />}
+        {plazo && (
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-400">Plazo</span>
+            <span className="rounded bg-bg px-2 py-1 font-medium text-accent">{plazo}</span>
+          </div>
+        )}
         <Fila label="Estatus" value={deuda.estatus} />
         {deuda.notas && <Fila label="Notas" value={deuda.notas} />}
       </div>
 
       {/* Registrar pago */}
-      <form onSubmit={registrarPago} className="rounded-xl bg-surface p-4 space-y-3">
-        <p className="font-semibold">Registrar pago</p>
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Monto"
-          value={monto}
-          onChange={(e) => setMonto(e.target.value)}
-          className="w-full rounded-lg bg-bg p-3 outline-none focus:ring-2 focus:ring-accent"
-          required
-        />
-        <select
-          value={tipoPago}
-          onChange={(e) => setTipoPago(e.target.value)}
-          className="w-full rounded-lg bg-bg p-3 outline-none focus:ring-2 focus:ring-accent"
-        >
-          <option value="no_especificado">No especificado</option>
-          <option value="capital">A capital</option>
-          <option value="interes">A interes</option>
-          <option value="total">Pago total</option>
-        </select>
+      {deuda.estatus === 'activa' && (
+        <form onSubmit={registrarPago} className="rounded-xl bg-surface p-4 space-y-3">
+          <p className="font-semibold">Registrar pago</p>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Monto"
+            value={monto}
+            onChange={(e) => setMonto(e.target.value)}
+            className="w-full rounded-lg bg-bg p-3 outline-none focus:ring-2 focus:ring-accent"
+            required
+          />
+          <select
+            value={tipoPago}
+            onChange={(e) => setTipoPago(e.target.value)}
+            className="w-full rounded-lg bg-bg p-3 outline-none focus:ring-2 focus:ring-accent"
+          >
+            <option value="no_especificado">No especificado</option>
+            <option value="capital">A capital</option>
+            <option value="interes">A interes</option>
+            <option value="total">Pago total</option>
+          </select>
 
-        {error && (
-          <p className="rounded-lg bg-red-900/30 p-3 text-sm text-red-400">{error}</p>
-        )}
+          {error && (
+            <p className="rounded-lg bg-red-900/30 p-3 text-sm text-red-400">{error}</p>
+          )}
 
-        <button
-          type="submit"
-          disabled={guardando}
-          className="w-full rounded-lg bg-accent p-3 font-semibold text-bg disabled:opacity-50"
-        >
-          {guardando ? 'Guardando...' : 'Registrar pago'}
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={guardando}
+            className="w-full rounded-lg bg-accent p-3 font-semibold text-bg disabled:opacity-50"
+          >
+            {guardando ? 'Guardando...' : 'Registrar pago'}
+          </button>
+        </form>
+      )}
 
       {/* Historico */}
       <div>
@@ -170,11 +192,11 @@ export default function DeudaDetalle() {
   )
 }
 
-function Fila({ label, value }) {
+function Fila({ label, value, valueClass = '' }) {
   return (
     <div className="flex justify-between text-sm">
       <span className="text-slate-400">{label}</span>
-      <span className="font-medium">{value}</span>
+      <span className={'font-medium ' + valueClass}>{value}</span>
     </div>
   )
 }
