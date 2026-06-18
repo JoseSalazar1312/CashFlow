@@ -1,0 +1,17 @@
+# Sync Rules para PowerSync
+# Subir esto en el dashboard de PowerSync Cloud (powersync.journeyapps.com)
+# Define qué datos de Supabase se sincronizan al SQLite local del usuario.
+
+bucket_definitions:
+  # Catálogos: iguales para todos los usuarios
+  catalogos:
+    data:
+      - select * from tipos_deuda
+      - select * from instituciones
+
+  # Datos del usuario: solo sus propias deudas y pagos
+  datos_usuario:
+    parameters: select request.user_id() as user_id
+    data:
+      - select * from deudas where user_id = bucket.user_id
+      - select * from historico_pagos where user_id = bucket.user_id
