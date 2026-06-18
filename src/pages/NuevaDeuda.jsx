@@ -1,23 +1,24 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, usePowerSync } from '@powersync/react'
+import { supabase } from '../lib/supabaseConnector'
 
 const DIAS_SEMANA = [
   { value: 0, label: 'Domingo' },
   { value: 1, label: 'Lunes' },
   { value: 2, label: 'Martes' },
-  { value: 3, label: 'Miércoles' },
+  { value: 3, label: 'Miercoles' },
   { value: 4, label: 'Jueves' },
   { value: 5, label: 'Viernes' },
-  { value: 6, label: 'Sábado' }
+  { value: 6, label: 'Sabado' }
 ]
 
 export default function NuevaDeuda() {
   const navigate = useNavigate()
   const db = usePowerSync()
 
-  const { data: tipos } = useQuery(`select * from tipos_deuda order by id`)
-  const { data: instituciones } = useQuery(`select * from instituciones order by nombre`)
+  const { data: tipos } = useQuery('select * from tipos_deuda order by id')
+  const { data: instituciones } = useQuery('select * from instituciones order by nombre')
 
   const [form, setForm] = useState({
     tipo_deuda_id: '',
@@ -33,6 +34,7 @@ export default function NuevaDeuda() {
     notas: ''
   })
   const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
 
   const tipoSeleccionado = tipos?.find((t) => String(t.id) === String(form.tipo_deuda_id))?.nombre
   const institucionSeleccionada = instituciones?.find(
@@ -46,40 +48,49 @@ export default function NuevaDeuda() {
   async function handleSubmit(e) {
     e.preventDefault()
     setGuardando(true)
+    setError(null)
 
     try {
-      const { data: session } = await db.execute('select 1')
+      // UUID generado en JS — SQLite no tiene uuid()
+      const id = crypto.randomUUID()
+
+      // user_id desde la sesion de Supabase — no usar auth.uid() en SQLite
+      const { data: { session } } = await supabase.auth.getSession()
+      const userId = session?.user?.id ?? ''
 
       await db.execute(
-        `insert into deudas (
-          id, user_id, tipo_deuda_id, institucion_id, nombre, total_a_pagar,
-          estatus, fecha_pago_fija, dia_semana_pago, dia_quincena_pago,
-          fecha_corte, promesa_pago, plazo_total, plazo_pagado,
-          fecha_creacion, notas
-        ) values (
-          uuid(), (select auth.uid()), ?, ?, ?, ?,
-          'activa', ?, ?, ?,
-          ?, ?, ?, 0,
-          datetime('now'), ?
-        )`,
+        'insert into deudas (' +
+          'id, user_id, tipo_deuda_id, institucion_id, nombre, total_a_pagar, ' +
+          'estatus, fecha_pago_fija, dia_semana_pago, dia_quincena_pago, ' +
+          'fecha_corte, promesa_pago, plazo_total, plazo_pagado, ' +
+          'fecha_creacion, notas' +
+        ') values (?, ?, ?, ?, ?, ?, ' +
+          "'activa', ?, ?, ?, " +
+          '?, ?, ?, 0, ' +
+          "datetime('now'), ?)",
         [
+          id,
+          userId,
           form.tipo_deuda_id || null,
           form.institucion_id || null,
           form.nombre,
           Number(form.total_a_pagar) || 0,
-          form.fecha_pago_fija || null,
+          form.fecha_pago_fija ? Number(form.fecha_pago_fija) : null,
           form.dia_semana_pago !== '' ? Number(form.dia_semana_pago) : null,
           form.dia_quincena_pago
             ? JSON.stringify(form.dia_quincena_pago.split(',').map((d) => Number(d.trim())))
             : null,
-          form.fecha_corte || null,
+          form.fecha_corte ? Number(form.fecha_corte) : null,
           form.promesa_pago || null,
-          form.plazo_total || null,
+          form.plazo_total ? Number(form.plazo_total) : null,
           form.notas || null
         ]
       )
 
       navigate('/')
+    } catch (err) {
+      console.error('Error guardando deuda:', err)
+      setError('Error al guardar: ' + err.message)
     } finally {
       setGuardando(false)
     }
@@ -107,7 +118,7 @@ export default function NuevaDeuda() {
         </Campo>
 
         {tipoSeleccionado === 'institucion' && (
-          <Campo label="Institución">
+          <Campo label="Institucion">
             <select
               value={form.institucion_id}
               onChange={(e) => update('institucion_id', e.target.value)}
@@ -124,7 +135,7 @@ export default function NuevaDeuda() {
           </Campo>
         )}
 
-        <Campo label="Nombre / descripción">
+        <Campo label="Nombre / descripcion">
           <input
             type="text"
             value={form.nombre}
@@ -146,13 +157,11 @@ export default function NuevaDeuda() {
           />
         </Campo>
 
-        {/* Campos condicionales según tipo */}
-
-        {/* Aplicación, Mercado Libre, Tarjeta de crédito: fecha fija mensual */}
+        {/* Aplicacion, Mercado Libre, TDC: dia fijo del mes */}
         {(tipoSeleccionado === 'aplicacion' ||
           tipoSeleccionado === 'tarjeta_credito' ||
           institucionSeleccionada === 'Mercado Libre') && (
-          <Campo label="Día de pago (mensual)">
+          <Campo label="Dia de pago (1-31)">
             <input
               type="number"
               min="1"
@@ -165,9 +174,9 @@ export default function NuevaDeuda() {
           </Campo>
         )}
 
-        {/* Tarjeta de crédito: fecha de corte */}
+        {/* TDC: fecha de corte adicional */}
         {tipoSeleccionado === 'tarjeta_credito' && (
-          <Campo label="Día de corte">
+          <Campo label="Dia de corte (1-31)">
             <input
               type="number"
               min="1"
@@ -180,10 +189,10 @@ export default function NuevaDeuda() {
           </Campo>
         )}
 
-        {/* Elektra: día de semana fijo + plazo en semanas */}
+        {/* Elektra: dia de semana + plazo en semanas */}
         {institucionSeleccionada === 'Elektra' && (
           <>
-            <Campo label="Día de pago (semanal)">
+            <Campo label="Dia de pago semanal">
               <select
                 value={form.dia_semana_pago}
                 onChange={(e) => update('dia_semana_pago', e.target.value)}
@@ -197,7 +206,7 @@ export default function NuevaDeuda() {
                 ))}
               </select>
             </Campo>
-            <Campo label="Plazo total (semanas pactadas)">
+            <Campo label="Plazo total (semanas)">
               <input
                 type="number"
                 value={form.plazo_total}
@@ -209,19 +218,19 @@ export default function NuevaDeuda() {
           </>
         )}
 
-        {/* Coopel: días del mes (puede ser quincenal o mensual según producto) + plazo en meses */}
+        {/* Coopel: dia(s) del mes + plazo en meses */}
         {institucionSeleccionada === 'Coopel' && (
           <>
-            <Campo label="Día(s) de pago en el mes">
+            <Campo label="Dia(s) de pago en el mes">
               <input
                 type="text"
                 value={form.dia_quincena_pago}
                 onChange={(e) => update('dia_quincena_pago', e.target.value)}
-                placeholder="Ej: 5  ó  5, 20 (separados por coma)"
+                placeholder="Ej: 5  o  5, 20 (separados por coma)"
                 className="w-full rounded-lg bg-surface p-3"
               />
             </Campo>
-            <Campo label="Plazo total (meses pactados)">
+            <Campo label="Plazo total (meses)">
               <input
                 type="number"
                 value={form.plazo_total}
@@ -233,9 +242,9 @@ export default function NuevaDeuda() {
           </>
         )}
 
-        {/* Nómina: quincenas fijas */}
+        {/* Nomina: quincenas */}
         {tipoSeleccionado === 'nomina' && (
-          <Campo label="Días de pago (quincena)">
+          <Campo label="Dias de pago (quincena)">
             <input
               type="text"
               value={form.dia_quincena_pago}
@@ -266,6 +275,10 @@ export default function NuevaDeuda() {
             rows={2}
           />
         </Campo>
+
+        {error && (
+          <p className="rounded-lg bg-red-900/30 p-3 text-sm text-red-400">{error}</p>
+        )}
 
         <button
           type="submit"

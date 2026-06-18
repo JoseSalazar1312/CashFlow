@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, usePowerSync } from '@powersync/react'
+import { supabase } from '../lib/supabaseConnector'
 import { proximaFechaPago, formatFecha, textoPlazo, nombreDiaSemana } from '../lib/fechas'
 
 export default function DeudaDetalle() {
@@ -11,18 +12,19 @@ export default function DeudaDetalle() {
   const [monto, setMonto] = useState('')
   const [tipoPago, setTipoPago] = useState('no_especificado')
   const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
 
   const { data: deudaRows } = useQuery(
-    `select d.*, t.nombre as tipo_nombre, i.nombre as institucion_nombre
-     from deudas d
-     join tipos_deuda t on d.tipo_deuda_id = t.id
-     left join instituciones i on d.institucion_id = i.id
-     where d.id = ?`,
+    'select d.*, t.nombre as tipo_nombre, i.nombre as institucion_nombre ' +
+    'from deudas d ' +
+    'join tipos_deuda t on d.tipo_deuda_id = t.id ' +
+    'left join instituciones i on d.institucion_id = i.id ' +
+    'where d.id = ?',
     [id]
   )
 
   const { data: pagos } = useQuery(
-    `select * from historico_pagos where deuda_id = ? order by fecha_pago desc`,
+    'select * from historico_pagos where deuda_id = ? order by fecha_pago desc',
     [id]
   )
 
@@ -38,18 +40,25 @@ export default function DeudaDetalle() {
   async function registrarPago(e) {
     e.preventDefault()
     if (!monto || Number(monto) <= 0) return
-
     setGuardando(true)
+    setError(null)
+
     try {
-      const { data: userData } = await db.execute('select auth.uid() as uid')
-      // En PowerSync el user_id se obtiene del token; lo más simple
-      // es incluirlo al insertar usando el id de sesión guardado.
+      const pagoId = crypto.randomUUID()
+
+      // user_id desde sesion de Supabase — no usar auth.uid() en SQLite
+      const { data: { session } } = await supabase.auth.getSession()
+      const userId = session?.user?.id ?? deuda.user_id
+
       await db.execute(
-        `insert into historico_pagos (id, user_id, deuda_id, monto, fecha_pago, tipo_pago)
-         values (uuid(), ?, ?, ?, datetime('now'), ?)`,
-        [deuda.user_id, deuda.id, Number(monto), tipoPago]
+        'insert into historico_pagos (id, user_id, deuda_id, monto, fecha_pago, tipo_pago) ' +
+        "values (?, ?, ?, ?, datetime('now'), ?)",
+        [pagoId, userId, deuda.id, Number(monto), tipoPago]
       )
       setMonto('')
+    } catch (err) {
+      console.error('Error registrando pago:', err)
+      setError('Error al registrar: ' + err.message)
     } finally {
       setGuardando(false)
     }
@@ -57,7 +66,7 @@ export default function DeudaDetalle() {
 
   async function marcarFinalizada() {
     await db.execute(
-      `update deudas set estatus = 'finalizada', fecha_finalizacion = datetime('now') where id = ?`,
+      "update deudas set estatus = 'finalizada', fecha_finalizacion = datetime('now') where id = ?",
       [deuda.id]
     )
     navigate('/')
@@ -66,23 +75,26 @@ export default function DeudaDetalle() {
   return (
     <div className="p-4 space-y-6">
       <button onClick={() => navigate(-1)} className="text-sm text-slate-400">
-        ← Volver
+        Volver
       </button>
 
       <div>
         <h1 className="text-2xl font-bold">{deuda.nombre}</h1>
         <p className="text-sm text-slate-400">
           {deuda.tipo_nombre.replace('_', ' ')}
-          {deuda.institucion_nombre ? ` · ${deuda.institucion_nombre}` : ''}
+          {deuda.institucion_nombre ? ' - ' + deuda.institucion_nombre : ''}
         </p>
       </div>
 
       <div className="rounded-xl bg-surface p-4 space-y-2">
-        <Fila label="Total a pagar" value={`$${Number(deuda.total_a_pagar).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`} />
-        {proxima && <Fila label="Próximo pago" value={formatFecha(proxima)} />}
-        {deuda.fecha_corte && <Fila label="Día de corte" value={`Día ${deuda.fecha_corte}`} />}
+        <Fila
+          label="Total a pagar"
+          value={'$' + Number(deuda.total_a_pagar).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+        />
+        {proxima && <Fila label="Proximo pago" value={formatFecha(proxima)} />}
+        {deuda.fecha_corte && <Fila label="Dia de corte" value={'Dia ' + deuda.fecha_corte} />}
         {deuda.dia_semana_pago !== null && deuda.dia_semana_pago !== undefined && (
-          <Fila label="Día de pago" value={nombreDiaSemana(deuda.dia_semana_pago)} />
+          <Fila label="Dia de pago" value={nombreDiaSemana(Number(deuda.dia_semana_pago))} />
         )}
         {plazo && <Fila label="Plazo" value={plazo} />}
         <Fila label="Estatus" value={deuda.estatus} />
@@ -108,9 +120,14 @@ export default function DeudaDetalle() {
         >
           <option value="no_especificado">No especificado</option>
           <option value="capital">A capital</option>
-          <option value="interes">A interés</option>
+          <option value="interes">A interes</option>
           <option value="total">Pago total</option>
         </select>
+
+        {error && (
+          <p className="rounded-lg bg-red-900/30 p-3 text-sm text-red-400">{error}</p>
+        )}
+
         <button
           type="submit"
           disabled={guardando}
@@ -131,12 +148,12 @@ export default function DeudaDetalle() {
                 <p className="text-xs text-slate-400">{p.tipo_pago.replace('_', ' ')}</p>
               </div>
               <p className="font-semibold text-accent">
-                ${Number(p.monto).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                {'$' + Number(p.monto).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
               </p>
             </div>
           ))}
           {(!pagos || pagos.length === 0) && (
-            <p className="text-sm text-slate-500">Aún no hay pagos registrados.</p>
+            <p className="text-sm text-slate-500">Aun no hay pagos registrados.</p>
           )}
         </div>
       </div>
